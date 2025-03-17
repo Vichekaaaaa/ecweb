@@ -2,129 +2,173 @@
 if (session_status() === PHP_SESSION_NONE) {
     session_start();
 }
-require_once 'includes/config.php'; // Adjust path as needed
+require_once 'includes/config.php'; // Assumes this provides Database class
 
-// Enable error reporting for debugging (remove in production)
 ini_set('display_errors', 1);
 ini_set('display_startup_errors', 1);
 error_reporting(E_ALL);
 
+class Order {
+    private $pdo;
+
+    public function __construct($pdo) {
+        $this->pdo = $pdo;
+        if (!$this->pdo) {
+            throw new Exception("PDO connection is not initialized.");
+        }
+    }
+
+    public function addOrder($data) {
+        $user_id = filter_var($data['user_id'] ?? 0, FILTER_SANITIZE_NUMBER_INT);
+        $total_amount = filter_var($data['total_amount'] ?? 0, FILTER_SANITIZE_NUMBER_FLOAT, FILTER_FLAG_ALLOW_FRACTION);
+        $order_date = filter_var($data['order_date'] ?? '', FILTER_SANITIZE_STRING);
+        $status = filter_var($data['status'] ?? '', FILTER_SANITIZE_STRING);
+        $shipping_address = filter_var($data['shipping_address'] ?? '', FILTER_SANITIZE_STRING);
+        $username = filter_var($data['username'] ?? '', FILTER_SANITIZE_STRING);
+
+        if (!$user_id || $user_id <= 0) return ['success' => false, 'message' => 'Invalid User ID.'];
+        if (!$total_amount || $total_amount <= 0) return ['success' => false, 'message' => 'Total Amount must be greater than 0.'];
+        if (!$order_date) return ['success' => false, 'message' => 'Order Date is required.'];
+        if (!$status || !in_array($status, ['pending', 'shipped', 'delivered'])) return ['success' => false, 'message' => 'Invalid status.'];
+        if (!$shipping_address) return ['success' => false, 'message' => 'Shipping Address is required.'];
+        if (!$username) return ['success' => false, 'message' => 'Username is required.'];
+
+        try {
+            $stmt = $this->pdo->prepare("INSERT INTO ecweb.orders (user_id, total_amount, order_date, status, shipping_address, username) VALUES (?, ?, ?, ?, ?, ?)");
+            $stmt->execute([$user_id, $total_amount, $order_date, $status, $shipping_address, $username]);
+            return ['success' => true, 'message' => 'Order added successfully.'];
+        } catch (PDOException $e) {
+            return ['success' => false, 'message' => 'Error: ' . $e->getMessage()];
+        }
+    }
+
+    public function updateOrder($id, $data) {
+        $user_id = filter_var($data['user_id'] ?? 0, FILTER_SANITIZE_NUMBER_INT);
+        $total_amount = filter_var($data['total_amount'] ?? 0, FILTER_SANITIZE_NUMBER_FLOAT, FILTER_FLAG_ALLOW_FRACTION);
+        $order_date = filter_var($data['order_date'] ?? '', FILTER_SANITIZE_STRING);
+        $status = filter_var($data['status'] ?? '', FILTER_SANITIZE_STRING);
+        $shipping_address = filter_var($data['shipping_address'] ?? '', FILTER_SANITIZE_STRING);
+        $username = filter_var($data['username'] ?? '', FILTER_SANITIZE_STRING);
+
+        if (!$user_id || $user_id <= 0) return ['success' => false, 'message' => 'Invalid User ID.'];
+        if (!$total_amount || $total_amount <= 0) return ['success' => false, 'message' => 'Total Amount must be greater than 0.'];
+        if (!$order_date) return ['success' => false, 'message' => 'Order Date is required.'];
+        if (!$status || !in_array($status, ['pending', 'shipped', 'delivered'])) return ['success' => false, 'message' => 'Invalid status.'];
+        if (!$shipping_address) return ['success' => false, 'message' => 'Shipping Address is required.'];
+        if (!$username) return ['success' => false, 'message' => 'Username is required.'];
+
+        try {
+            $stmt = $this->pdo->prepare("UPDATE ecweb.orders SET user_id = ?, total_amount = ?, order_date = ?, status = ?, shipping_address = ?, username = ? WHERE order_id = ?");
+            $stmt->execute([$user_id, $total_amount, $order_date, $status, $shipping_address, $username, $id]);
+            return ['success' => true, 'message' => 'Order updated successfully.'];
+        } catch (PDOException $e) {
+            return ['success' => false, 'message' => 'Error: ' . $e->getMessage()];
+        }
+    }
+
+    public function deleteOrder($id) {
+        if (!ctype_digit((string)$id) || $id <= 0) return ['success' => false, 'message' => 'Invalid order ID.'];
+
+        try {
+            $this->pdo->beginTransaction();
+            $stmt = $this->pdo->prepare("DELETE FROM ecweb.order_items WHERE order_id = ?");
+            $stmt->execute([$id]);
+            $stmt = $this->pdo->prepare("DELETE FROM ecweb.orders WHERE order_id = ?");
+            $stmt->execute([$id]);
+            $this->pdo->commit();
+            return ['success' => true, 'message' => 'Order deleted successfully.'];
+        } catch (PDOException $e) {
+            $this->pdo->rollBack();
+            return ['success' => false, 'message' => 'Error deleting order: ' . $e->getMessage()];
+        }
+    }
+
+    public function getOrders($searchTerm = '') {
+        try {
+            if ($searchTerm) {
+                $stmt = $this->pdo->prepare("SELECT order_id, user_id, total_amount, order_date, status, shipping_address, username FROM ecweb.orders WHERE order_id = ? OR user_id = ? OR status LIKE ? OR shipping_address LIKE ? OR username LIKE ?");
+                $stmt->execute([$searchTerm, $searchTerm, "%$searchTerm%", "%$searchTerm%", "%$searchTerm%"]);
+            } else {
+                $stmt = $this->pdo->query("SELECT order_id, user_id, total_amount, order_date, status, shipping_address, username FROM ecweb.orders");
+            }
+            return $stmt->fetchAll(PDO::FETCH_ASSOC);
+        } catch (PDOException $e) {
+            return ['error' => 'Error fetching orders: ' . $e->getMessage()];
+        }
+    }
+
+    public function getOrderById($id) {
+        try {
+            $stmt = $this->pdo->prepare("SELECT * FROM ecweb.orders WHERE order_id = ?");
+            $stmt->execute([$id]);
+            return $stmt->fetch(PDO::FETCH_ASSOC) ?: null;
+        } catch (PDOException $e) {
+            return ['error' => 'Error fetching order: ' . $e->getMessage()];
+        }
+    }
+    
+}
+
+
+// Initialize the Database and Order classes
+$database = new Database();
+$pdo = $database->getConnection();
+
+if (!$pdo) {
+    die("Failed to get PDO connection from Database class.");
+}
+
+try {
+    $orderManager = new Order($pdo);
+} catch (Exception $e) {
+    die("Error initializing Order class: " . $e->getMessage());
+}
+
 $successMessage = '';
 $errorMessage = '';
-
 $action = $_GET['action'] ?? 'view';
 $id = $_GET['id'] ?? null;
 
 // Handle order addition or editing
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($action === 'add_order' || $action === 'edit_order')) {
-    $user_id = filter_input(INPUT_POST, 'user_id', FILTER_SANITIZE_NUMBER_INT);
-    $total_amount = filter_input(INPUT_POST, 'total_amount', FILTER_SANITIZE_NUMBER_FLOAT, FILTER_FLAG_ALLOW_FRACTION);
-    $order_date = filter_input(INPUT_POST, 'order_date', FILTER_SANITIZE_STRING);
-    $status = filter_input(INPUT_POST, 'status', FILTER_SANITIZE_STRING);
-    $shipping_address = filter_input(INPUT_POST, 'shipping_address', FILTER_SANITIZE_STRING);
-    $username = filter_input(INPUT_POST, 'username', FILTER_SANITIZE_STRING);
+    $data = [
+        'user_id' => $_POST['user_id'] ?? '',
+        'total_amount' => $_POST['total_amount'] ?? '',
+        'order_date' => $_POST['order_date'] ?? '',
+        'status' => $_POST['status'] ?? '',
+        'shipping_address' => $_POST['shipping_address'] ?? '',
+        'username' => $_POST['username'] ?? ''
+    ];
 
-    // Server-side validation
-    if (!$user_id || $user_id <= 0) {
-        $errorMessage = "Invalid User ID.";
-    } elseif (!$total_amount || $total_amount <= 0) {
-        $errorMessage = "Total Amount must be greater than 0.";
-    } elseif (!$order_date) {
-        $errorMessage = "Order Date is required.";
-    } elseif (!$status || !in_array($status, ['pending', 'shipped', 'delivered'])) {
-        $errorMessage = "Invalid status.";
-    } elseif (!$shipping_address) {
-        $errorMessage = "Shipping Address is required.";
-    } elseif (!$username) {
-        $errorMessage = "Username is required.";
-    } else {
-        try {
-            if ($action === 'add_order') {
-                $stmt = $pdo->prepare("INSERT INTO ecweb.orders (user_id, total_amount, order_date, status, shipping_address, username) VALUES (?, ?, ?, ?, ?, ?)");
-                if ($stmt->execute([$user_id, $total_amount, $order_date, $status, $shipping_address, $username])) {
-                    $successMessage = "Order added successfully.";
-                    header("Location: index.php?page=orders&success=1");
-                    exit;
-                }
-            } elseif ($action === 'edit_order' && $id) {
-                $stmt = $pdo->prepare("UPDATE ecweb.orders SET user_id = ?, total_amount = ?, order_date = ?, status = ?, shipping_address = ?, username = ? WHERE order_id = ?");
-                if ($stmt->execute([$user_id, $total_amount, $order_date, $status, $shipping_address, $username, $id])) {
-                    $successMessage = "Order updated successfully.";
-                    header("Location: index.php?page=orders&success=1");
-                    exit;
-                }
-            }
-            $errorMessage = "Failed to process the request.";
-        } catch (PDOException $e) {
-            $errorMessage = "Error: " . $e->getMessage();
-        }
+    if ($action === 'add_order') {
+        $result = $orderManager->addOrder($data);
+    } elseif ($action === 'edit_order' && $id) {
+        $result = $orderManager->updateOrder($id, $data);
     }
-}
 
-// Handle order deletion
-if ($action === 'delete_order') {
-    echo "<pre>";
-    echo "Debugging Order Deletion:\n";
-    echo "All GET parameters: " . print_r($_GET, true) . "\n";
-    $id = isset($_GET['id']) ? trim($_GET['id']) : null;
-    echo "Processed ID: " . ($id ?: 'null') . "\n";
-    $isValid = ($id !== null && ctype_digit($id) && (int)$id > 0);
-    echo "Validation: id is " . ($isValid ? 'valid' : 'invalid') . "\n";
-    echo "ctype_digit($id): " . (ctype_digit($id) ? 'yes' : 'no') . "\n";
-    echo "(int)$id: " . ((int)$id) . "\n";
-    echo "</pre>";
-    exit; // Stop execution to see the debug output
-
-    $id = (int)$id; // Cast to integer
-
-    try {
-        $pdo->beginTransaction();
-
-        // Delete related order items (optional if ON DELETE CASCADE is set)
-        $stmt = $pdo->prepare("DELETE FROM ecweb.order_items WHERE order_id = ?");
-        $stmt->execute([$id]);
-
-        // Delete the order
-        $stmt = $pdo->prepare("DELETE FROM ecweb.orders WHERE order_id = ?");
-        $stmt->execute([$id]);
-
-        $pdo->commit();
-
-        $successMessage = "Order deleted successfully.";
-        header("Location: index.php?page=orders&success=1");
-        exit;
-    } catch (PDOException $e) {
-        $pdo->rollBack();
-        $errorMessage = "Error deleting order: " . $e->getMessage();
-        header("Location: index.php?page=orders&error=" . urlencode($errorMessage));
-        exit;
+    if (isset($result)) {
+        if ($result['success']) {
+            $successMessage = $result['message'];
+            header("Location: ../../index.php?page=orders&success=1");
+            exit;
+        } else {
+            $errorMessage = $result['message'];
+        }
+    } else {
+        $errorMessage = "Failed to process the request.";
     }
 }
 
 // Handle search functionality
 $searchTerm = $_GET['search'] ?? '';
-$orders = [];
-
-try {
-    if ($searchTerm) {
-        $stmt = $pdo->prepare("SELECT order_id, user_id, total_amount, order_date, status, shipping_address, username FROM ecweb.orders WHERE order_id = ? OR user_id = ? OR status LIKE ? OR shipping_address LIKE ? OR username LIKE ?");
-        $stmt->execute([$searchTerm, $searchTerm, "%$searchTerm%", "%$searchTerm%", "%$searchTerm%"]);
-    } else {
-        $stmt = $pdo->query("SELECT order_id, user_id, total_amount, order_date, status, shipping_address, username FROM ecweb.orders");
-    }
-    $orders = $stmt->fetchAll(PDO::FETCH_ASSOC);
-} catch (PDOException $e) {
-    $errorMessage = "Error fetching orders: " . $e->getMessage();
-}
+$orders = $orderManager->getOrders($searchTerm);
 
 // Fetch order data for editing
 $order = null;
 if ($action === 'edit_order' && $id) {
-    $stmt = $pdo->prepare("SELECT * FROM ecweb.orders WHERE order_id = ?");
-    $stmt->execute([$id]);
-    $order = $stmt->fetch(PDO::FETCH_ASSOC);
+    $order = $orderManager->getOrderById($id);
     if (!$order) {
-        header("Location: index.php?page=orders");
+        header("Location: ../../index.php?page=orders");
         exit;
     }
 }
@@ -137,7 +181,9 @@ if ($action === 'edit_order' && $id) {
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Orders - Admin Panel</title>
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/sweetalert2@11/dist/sweetalert2.min.css">
     <style>
+        /* Same styles as before */
         body {
             background-color: #f8f9fa;
             font-family: Arial, sans-serif;
@@ -431,26 +477,6 @@ if ($action === 'edit_order' && $id) {
             font-weight: 500;
             color: #2c3e50;
         }
-        .toast {
-            position: fixed;
-            top: 20px;
-            right: 20px;
-            padding: 10px 20px;
-            border-radius: 0;
-            color: white;
-            z-index: 1050;
-            opacity: 0;
-            transition: opacity 0.3s ease;
-        }
-        .toast.show {
-            opacity: 1;
-        }
-        .toast.success {
-            background-color: #28a745;
-        }
-        .toast.error {
-            background-color: #dc3545;
-        }
         @media (max-width: 768px) {
             .product-table {
                 display: block;
@@ -498,7 +524,7 @@ if ($action === 'edit_order' && $id) {
 </head>
 <body>
 <div class="container">
-        <h2 >Orders</h2>
+    <h2>Orders</h2>
     <p>Manage your order list here.</p>
 
     <?php if (isset($_GET['success']) && $_GET['success']): ?>
@@ -514,14 +540,14 @@ if ($action === 'edit_order' && $id) {
     <?php if ($action === 'view'): ?>
         <div class="action-bar">
             <div class="search-form">
-                <form method="GET" action="index.php" style="display: flex; align-items: center; width: 100%;">
+                <form method="GET" action="../../index.php" style="display: flex; align-items: center; width: 100%;">
                     <input type="hidden" name="page" value="orders">
                     <input type="text" name="search" placeholder="Search by ID, User ID, Status, Address, or Username" value="<?php echo htmlspecialchars($searchTerm); ?>" aria-label="Search orders">
                     <button type="submit" aria-label="Search"><i class="fas fa-search"></i></button>
-                    <a href="index.php?page=orders" class="back-button" aria-label="Clear search">Clear</a>
+                    <a href="../../index.php?page=orders" class="back-button" aria-label="Clear search">Clear</a>
                 </form>
             </div>
-            <a href="index.php?page=orders&action=add_order" class="add-new-product-button" aria-label="Add new order">Add New Order</a>
+            <a href="../../index.php?page=orders&action=add_order" class="add-new-product-button" aria-label="Add new order">Add New Order</a>
         </div>
 
         <table class="product-table">
@@ -538,9 +564,9 @@ if ($action === 'edit_order' && $id) {
                 </tr>
             </thead>
             <tbody>
-                <?php if (empty($orders)): ?>
+                <?php if (empty($orders) || isset($orders['error'])): ?>
                     <tr>
-                        <td colspan="8">No orders found.</td>
+                        <td colspan="8"><?php echo isset($orders['error']) ? htmlspecialchars($orders['error']) : 'No orders found.'; ?></td>
                     </tr>
                 <?php else: ?>
                     <?php foreach ($orders as $order): ?>
@@ -561,7 +587,7 @@ if ($action === 'edit_order' && $id) {
                             </td>
                             <td class="action-buttons">
                                 <a href="index.php?page=orders&action=edit_order&id=<?php echo $order['order_id']; ?>" class="btn btn-warning" aria-label="Edit order <?php echo htmlspecialchars($order['order_id']); ?>">Edit</a>
-                                <a href="index.php?page=orders&action=delete_order&id=<?php echo $order['order_id']; ?>" class="btn btn-custom" onclick="return confirm('Are you sure you want to delete this order?');" aria-label="Delete order <?php echo htmlspecialchars($order['order_id']); ?>">Delete</a>
+                                <button class="btn btn-custom delete-btn" data-order-id="<?php echo htmlspecialchars($order['order_id']); ?>" aria-label="Delete order <?php echo htmlspecialchars($order['order_id']); ?>">Delete</button>
                             </td>
                         </tr>
                     <?php endforeach; ?>
@@ -570,7 +596,7 @@ if ($action === 'edit_order' && $id) {
         </table>
     <?php elseif ($action === 'add_order'): ?>
         <h3>Add New Order</h3>
-        <form method="POST" action="index.php?page=orders&action=add_order">
+        <form method="POST" action="../../index.php?page=orders&action=add_order">
             <div class="mb-3">
                 <label for="user_id" class="form-label">User ID</label>
                 <input type="number" id="user_id" name="user_id" class="form-control" required>
@@ -600,11 +626,11 @@ if ($action === 'edit_order' && $id) {
                 </select>
             </div>
             <button type="submit" class="add-new-product-button">Add Order</button>
-            <a href="index.php?page=orders" class="back-button">Back</a>
+            <a href="../../index.php?page=orders" class="back-button">Back</a>
         </form>
     <?php elseif ($action === 'edit_order' && $order): ?>
         <h3>Edit Order</h3>
-        <form method="POST" action="index.php?page=orders&action=edit_order&id=<?php echo $order['order_id']; ?>">
+        <form method="POST" action="../../index.php?page=orders&action=edit_order&id=<?php echo $order['order_id']; ?>">
             <div class="mb-3">
                 <label for="order_id" class="form-label">Order ID</label>
                 <input type="text" id="order_id" name="order_id" class="form-control" value="<?php echo htmlspecialchars($order['order_id']); ?>" disabled>
@@ -638,14 +664,14 @@ if ($action === 'edit_order' && $id) {
                 </select>
             </div>
             <button type="submit" class="add-new-product-button">Update Order</button>
-            <a href="index.php?page=orders" class="back-button">Back</a>
+            <a href="../../index.php?page=orders" class="back-button">Back</a>
         </form>
     <?php endif; ?>
 </div>
 
+<script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
 <script>
 document.addEventListener("DOMContentLoaded", function() {
-    // Handle success/error alerts
     const successAlert = document.querySelector('#successAlert');
     if (successAlert) {
         successAlert.style.display = "block";
@@ -657,20 +683,6 @@ document.addEventListener("DOMContentLoaded", function() {
         setTimeout(() => errorAlert.style.display = "none", 5000);
     }
 
-    // Function to show toast notifications
-    function showToast(message, type) {
-        const toast = document.createElement('div');
-        toast.className = `toast ${type}`;
-        toast.textContent = message;
-        document.body.appendChild(toast);
-        setTimeout(() => toast.classList.add('show'), 100);
-        setTimeout(() => {
-            toast.classList.remove('show');
-            setTimeout(() => toast.remove(), 300);
-        }, 3000);
-    }
-
-    // Handle status updates
     const updateButtons = document.querySelectorAll('.update-btn');
     updateButtons.forEach(button => {
         const statusSelect = button.parentElement.querySelector('.status-select');
@@ -684,47 +696,164 @@ document.addEventListener("DOMContentLoaded", function() {
 
         statusSelect.style.color = getStatusColor(currentStatus);
 
-        button.addEventListener('click', function() {
+        button.addEventListener('click', async function() {
             const orderId = this.getAttribute('data-order-id');
             const newStatus = statusSelect.value;
 
-            // Show loading state
+            const result = await Swal.fire({
+                title: 'Are you sure, babe?',
+                text: `Do you want to update the status of Order #${orderId} to "${newStatus}"?`,
+                icon: 'question',
+                showCancelButton: true,
+                confirmButtonColor: '#007bff',
+                cancelButtonColor: '#dc3545',
+                confirmButtonText: 'Yes, update it!',
+                cancelButtonText: 'Nope, cancel'
+            });
+
+            if (!result.isConfirmed) {
+                return;
+            }
+
             button.classList.add('loading');
             button.disabled = true;
+            
 
-            fetch('/admin/pages/orders/update_status.php', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/x-www-form-urlencoded',
-                },
-                body: `order_id=${encodeURIComponent(orderId)}&status=${encodeURIComponent(newStatus)}`
-            })
-            .then(response => {
-                if (!response.ok) throw new Error('Network response was not ok');
-                return response.json();
-            })
-            .then(data => {
+            try {
+                const response = await fetch('pages/orders/update_status.php', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/x-www-form-urlencoded',
+                    },
+                    body: `order_id=${encodeURIComponent(orderId)}&status=${encodeURIComponent(newStatus)}`
+                });
+
+                if (!response.ok) {
+                    throw new Error('Network response was not ok ' + response.statusText);
+                }
+
+                const text = await response.text();
+                let data;
+                try {
+                    data = JSON.parse(text);
+                } catch (e) {
+                    console.error('Failed to parse JSON:', text);
+                    throw new Error('Invalid response from server');
+                }
+
                 button.classList.remove('loading');
                 button.disabled = false;
+
                 if (data.success) {
-                    showToast('Status updated successfully!', 'success');
+                    await Swal.fire({
+                        title: 'Updated!',
+                        text: 'Status updated successfully, babe! 🎉',
+                        icon: 'success',
+                        confirmButtonColor: '#007bff'
+                    });
                     button.setAttribute('data-current-status', newStatus);
                 } else {
-                    showToast('Error: ' + data.message, 'error');
+                    await Swal.fire({
+                        title: 'Oops...',
+                        text: 'Something went wrong: ' + data.message,
+                        icon: 'error',
+                        confirmButtonColor: '#dc3545'
+                    });
                     statusSelect.value = currentStatus;
                     statusSelect.style.color = getStatusColor(currentStatus);
                 }
-            })
-            .catch(error => {
+            } catch (error) {
                 button.classList.remove('loading');
                 button.disabled = false;
-                showToast('An error occurred: ' + error.message, 'error');
+                await Swal.fire({
+                    title: 'Oops...',
+                    text: 'An error occurred: ' + error.message,
+                    icon: 'error',
+                    confirmButtonColor: '#dc3545'
+                });
                 statusSelect.value = currentStatus;
                 statusSelect.style.color = getStatusColor(currentStatus);
-            });
+            }
         });
     });
 
+    // Add delete functionality with SweetAlert2
+    const deleteButtons = document.querySelectorAll('.delete-btn');
+    deleteButtons.forEach(button => {
+    button.addEventListener('click', async function() {
+        const orderId = this.getAttribute('data-order-id');
+
+        const result = await Swal.fire({
+            title: 'Are you sure, babe?',
+            text: `Do you want to delete Order #${orderId}? This action cannot be undone!`,
+            icon: 'warning',
+            showCancelButton: true,
+            confirmButtonColor: '#dc3545',
+            cancelButtonColor: '#6c757d',
+            confirmButtonText: 'Yes, delete it!',
+            cancelButtonText: 'No, keep it'
+        });
+
+        if (!result.isConfirmed) {
+            return;
+        }
+
+        try {
+            button.disabled = true;
+            button.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Deleting...';
+
+            const response = await fetch(`/admin/pages/orders/delete_order.php?id=${encodeURIComponent(orderId)}`, {
+                method: 'GET',
+                headers: {
+                    'Accept': 'application/json'
+                }
+            });
+
+            const text = await response.text();
+            console.log('Raw response:', text); // Log the raw response
+
+            if (!response.ok) {
+                throw new Error(`Network response was not ok: ${response.status} ${response.statusText}`);
+            }
+
+            let data;
+            try {
+                data = JSON.parse(text);
+            } catch (e) {
+                console.error('Failed to parse JSON:', text);
+                throw new Error('Invalid response from server: ' + e.message);
+            }
+
+            if (data.success) {
+                await Swal.fire({
+                    title: 'Deleted!',
+                    text: 'The order has been deleted successfully, babe! 🎉',
+                    icon: 'success',
+                    confirmButtonColor: '#007bff'
+                });
+                
+                button.closest('tr').remove();
+                
+                if (document.querySelectorAll('.product-table tbody tr').length === 0) {
+                    document.querySelector('.product-table tbody').innerHTML = 
+                        '<tr><td colspan="8">No orders found.</td></tr>';
+                }
+            } else {
+                throw new Error(data.message);
+            }
+        } catch (error) {
+            await Swal.fire({
+                title: 'Oops...',
+                text: 'Failed to delete the order: ' + error.message,
+                icon: 'error',
+                confirmButtonColor: '#dc3545'
+            });
+        } finally {
+            button.disabled = false;
+            button.innerHTML = 'Delete';
+        }
+    });
+});
     function getStatusColor(status) {
         switch (status.toLowerCase()) {
             case 'pending': return '#007bff';

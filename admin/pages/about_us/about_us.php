@@ -1,149 +1,196 @@
 <?php
 include_once 'includes/config.php'; // Adjust path to reach the root
 
-// Check if session is already started, if not, start it
+// Ensure session is started
 if (session_status() === PHP_SESSION_NONE) {
     session_start();
 }
 
-$message = '';
-$edit_id = null;
+// Instantiate Database class to get PDO connection
+$database = new Database();
+$pdo = $database->getConnection();
 
-// Generate or retrieve a unique token for this request
-if (!isset($_SESSION['token'])) {
-    $_SESSION['token'] = md5(uniqid(mt_rand(), true));
-}
-$token = $_SESSION['token'];
+class AboutUsManager {
+    private $pdo;
+    private $logDir;
+    private $logFile;
+    private $message = '';
+    private $editId = null;
+    private $token;
 
-// Create logs directory if it doesn't exist
-$logDir = dirname(__FILE__) . '/../logs';
-if (!file_exists($logDir)) {
-    mkdir($logDir, 0777, true);
-}
+    public function __construct(PDO $pdo) {
+        $this->pdo = $pdo;
+        $this->logDir = dirname(__FILE__) . '/../logs';
+        $this->logFile = $this->logDir . '/token_debug.log';
 
-if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    // Log token for debugging with absolute path
-    $logFile = $logDir . '/token_debug.log';
-    error_log("Received token: " . ($_POST['token'] ?? 'null') . ", Session token: " . $_SESSION['token'], 3, $logFile);
+        if (!file_exists($this->logDir)) {
+            mkdir($this->logDir, 0777, true);
+        }
 
-    // Check if the token matches to prevent resubmission
-    if (isset($_POST['token']) && $_POST['token'] === $_SESSION['token']) {
+        if (session_status() === PHP_SESSION_NONE) {
+            session_start();
+        }
+
+        if (!isset($_SESSION['token'])) {
+            $_SESSION['token'] = md5(uniqid(mt_rand(), true));
+        }
+        $this->token = $_SESSION['token'];
+    }
+
+    public function getToken() {
+        return $this->token;
+    }
+
+    public function getMessage() {
+        return $this->message;
+    }
+
+    public function getEditId() {
+        return $this->editId;
+    }
+
+    public function processForm() {
+        if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+            return $this->fetchData();
+        }
+
+        error_log("Received token: " . ($_POST['token'] ?? 'null') . ", Session token: " . $this->token, 3, $this->logFile);
+
+        if (!isset($_POST['token']) || $_POST['token'] !== $this->token) {
+            $this->message = "Error: Invalid request token.";
+            error_log("Token mismatch: Received " . ($_POST['token'] ?? 'null') . ", Expected " . $this->token, 3, $this->logFile);
+            return $this->fetchData();
+        }
+
         $section = $_POST['section'] ?? '';
         $content = $_POST['content'] ?? '';
         $name = $_POST['name'] ?? null;
         $role = $_POST['role'] ?? null;
-        $image_path = $_POST['image_path'] ?? null;
-        $edit_id = $_POST['edit_id'] ?? null;
-        $delete_id = $_POST['delete_id'] ?? null;
+        $imagePath = $_POST['image_path'] ?? null;
+        $this->editId = $_POST['edit_id'] ?? null;
+        $deleteId = $_POST['delete_id'] ?? null;
 
-        // Handle Delete
-        if ($delete_id) {
-            try {
-                // First, fetch the image path to delete the file
-                $stmt = $pdo->prepare("SELECT image_path FROM about_us WHERE id = :id");
-                $stmt->execute([':id' => $delete_id]);
-                $row = $stmt->fetch(PDO::FETCH_ASSOC);
+        if ($deleteId) {
+            $this->handleDelete($deleteId);
+        } elseif ($section && $content) {
+            $this->handleSaveOrUpdate($section, $content, $name, $role, $imagePath);
+        }
 
-                // Delete the image file if it exists
-                if ($row && !empty($row['image_path']) && file_exists($row['image_path'])) {
-                    if (!unlink($row['image_path'])) {
-                        error_log("Failed to delete image file: " . $row['image_path'], 3, $logFile);
-                        $message = "Warning: Entry deleted, but image file could not be removed.";
-                    }
+        return $this->fetchData();
+    }
+
+    private function handleDelete($deleteId) {
+        try {
+            $stmt = $this->pdo->prepare("SELECT image_path FROM about_us WHERE id = :id");
+            $stmt->execute([':id' => $deleteId]);
+            $row = $stmt->fetch(PDO::FETCH_ASSOC);
+
+            if ($row && !empty($row['image_path']) && file_exists($row['image_path'])) {
+                if (!unlink($row['image_path'])) {
+                    error_log("Failed to delete image file: " . $row['image_path'], 3, $this->logFile);
+                    $this->message = "Warning: Entry deleted, but image file could not be removed.";
                 }
+            }
 
-                // Delete the database entry
-                $stmt = $pdo->prepare("DELETE FROM about_us WHERE id = :id");
-                $stmt->execute([':id' => $delete_id]);
-                $message = $message ?: "Entry deleted successfully!";
-                // No redirect, stay on page
-                // Refresh data manually via JavaScript
-            } catch (PDOException $e) {
-                error_log("DB Error: " . $e->getMessage(), 3, $logFile);
-                $message = "Error: Could not delete entry.";
+            $stmt = $this->pdo->prepare("DELETE FROM about_us WHERE id = :id");
+            $stmt->execute([':id' => $deleteId]);
+            $this->message = $this->message ?: "Entry deleted successfully!";
+        } catch (PDOException $e) {
+            error_log("DB Error: " . $e->getMessage(), 3, $this->logFile);
+            $this->message = "Error: Could not delete entry.";
+        }
+    }
+
+    private function handleSaveOrUpdate($section, $content, $name, $role, $imagePath) {
+        if (isset($_FILES['image']) && $_FILES['image']['error'] === UPLOAD_ERR_OK) {
+            $imagePath = $this->handleImageUpload($this->editId);
+            if (strpos($imagePath, 'Error') === 0) {
+                $this->message = $imagePath;
+                return;
             }
         }
-        // Handle Insert or Update
-        elseif ($section && $content) {
-            if (isset($_FILES['image']) && $_FILES['image']['error'] === UPLOAD_ERR_OK) {
-                $targetDir = "../assets/images/about_us/";
-                if (!is_dir($targetDir) && !mkdir($targetDir, 0755, true)) {
-                    $message = "Error: Could not create directory.";
-                } elseif (!is_writable($targetDir) && !chmod($targetDir, 0755)) {
-                    $message = "Error: Directory is not writable.";
-                } else {
-                    $fileName = uniqid() . '_' . preg_replace('/[^A-Za-z0-9_\-\.]/', '', basename($_FILES['image']['name']));
-                    $targetFile = $targetDir . $fileName;
-                    $fileExt = strtolower(pathinfo($fileName, PATHINFO_EXTENSION));
-                    $allowedExts = ['jpg', 'jpeg', 'png', 'gif'];
-                    if (!in_array($fileExt, $allowedExts)) {
-                        $message = "Error: Only JPEG, PNG, and GIF files are allowed.";
-                    } elseif (move_uploaded_file($_FILES['image']['tmp_name'], $targetFile)) {
-                        // If a new image is uploaded during edit, delete the old one
-                        if ($edit_id) {
-                            $stmt = $pdo->prepare("SELECT image_path FROM about_us WHERE id = :id");
-                            $stmt->execute([':id' => $edit_id]);
-                            $row = $stmt->fetch(PDO::FETCH_ASSOC);
-                            if ($row && !empty($row['image_path']) && file_exists($row['image_path'])) {
-                                unlink($row['image_path']);
-                            }
-                        }
-                        $image_path = $targetFile;
-                    } else {
-                        $message = "Error: Failed to upload image.";
-                    }
-                }
+
+        try {
+            $params = [
+                ':section' => $section,
+                ':content' => $content,
+                ':image_path' => $imagePath,
+                ':name' => $name,
+                ':role' => $role
+            ];
+
+            if ($this->editId) {
+                $params[':id'] = $this->editId;
+                $stmt = $this->pdo->prepare("UPDATE about_us SET section = :section, content = :content, image_path = :image_path, name = :name, role = :role WHERE id = :id");
+                $stmt->execute($params);
+                $this->message = "Entry updated successfully!";
+            } else {
+                $stmt = $this->pdo->prepare("INSERT INTO about_us (section, content, image_path, name, role) VALUES (:section, :content, :image_path, :name, :role)");
+                $stmt->execute($params);
+                $this->message = "Content added successfully!";
             }
 
-            if (!$message || strpos($message, 'Error') === false) {
-                try {
-                    if ($edit_id) {
-                        $stmt = $pdo->prepare("UPDATE about_us SET section = :section, content = :content, image_path = :image_path, name = :name, role = :role WHERE id = :id");
-                        $stmt->execute([
-                            ':section' => $section,
-                            ':content' => $content,
-                            ':image_path' => $image_path,
-                            ':name' => $name,
-                            ':role' => $role,
-                            ':id' => $edit_id
-                        ]);
-                        $message = "Entry updated successfully!";
-                    } else {
-                        $stmt = $pdo->prepare("INSERT INTO about_us (section, content, image_path, name, role) VALUES (:section, :content, :image_path, :name, :role)");
-                        $stmt->execute([
-                            ':section' => $section,
-                            ':content' => $content,
-                            ':image_path' => $image_path,
-                            ':name' => $name,
-                            ':role' => $role
-                        ]);
-                        $message = "Content added successfully!";
-                    }
-                    // Reset token to prevent resubmission
-                    $_SESSION['token'] = md5(uniqid(mt_rand(), true));
-                    // Reset form fields
-                    $edit_id = null;
-                } catch (PDOException $e) {
-                    error_log("DB Error: " . $e->getMessage(), 3, $logFile);
-                    $message = "Error: Database operation failed.";
-                }
+            $_SESSION['token'] = md5(uniqid(mt_rand(), true));
+            $this->token = $_SESSION['token'];
+            $this->editId = null;
+        } catch (PDOException $e) {
+            error_log("DB Error: " . $e->getMessage(), 3, $this->logFile);
+            $this->message = "Error: Database operation failed.";
+        }
+    }
+
+    private function handleImageUpload($editId) {
+        $targetDir = "../assets/images/about_us/";
+        if (!is_dir($targetDir) && !mkdir($targetDir, 0755, true)) {
+            return "Error: Could not create directory.";
+        }
+        if (!is_writable($targetDir) && !chmod($targetDir, 0755)) {
+            return "Error: Directory is not writable.";
+        }
+
+        $fileName = uniqid() . '_' . preg_replace('/[^A-Za-z0-9_\-\.]/', '', basename($_FILES['image']['name']));
+        $targetFile = $targetDir . $fileName;
+        $fileExt = strtolower(pathinfo($fileName, PATHINFO_EXTENSION));
+        $allowedExts = ['jpg', 'jpeg', 'png', 'gif'];
+
+        if (!in_array($fileExt, $allowedExts)) {
+            return "Error: Only JPEG, PNG, and GIF files are allowed.";
+        }
+
+        if (!move_uploaded_file($_FILES['image']['tmp_name'], $targetFile)) {
+            return "Error: Failed to upload image.";
+        }
+
+        if ($editId) {
+            $stmt = $this->pdo->prepare("SELECT image_path FROM about_us WHERE id = :id");
+            $stmt->execute([':id' => $editId]);
+            $row = $stmt->fetch(PDO::FETCH_ASSOC);
+            if ($row && !empty($row['image_path']) && file_exists($row['image_path'])) {
+                unlink($row['image_path']);
             }
         }
-    } else {
-        $message = "Error: Invalid request token.";
-        error_log("Token mismatch: Received " . ($_POST['token'] ?? 'null') . ", Expected " . $_SESSION['token'], 3, $logFile);
+
+        return $targetFile;
+    }
+
+    private function fetchData() {
+        try {
+            $stmt = $this->pdo->query("SELECT * FROM about_us ORDER BY section, name");
+            return $stmt->fetchAll(PDO::FETCH_ASSOC);
+        } catch (PDOException $e) {
+            error_log("DB Error: " . $e->getMessage(), 3, $this->logFile);
+            $this->message = "Error fetching data.";
+            return [];
+        }
     }
 }
 
-// Refresh the data after any operation
-try {
-    $stmt = $pdo->query("SELECT * FROM about_us ORDER BY section, name");
-    $aboutData = $stmt->fetchAll(PDO::FETCH_ASSOC);
-} catch (PDOException $e) {
-    error_log("DB Error: " . $e->getMessage(), 3, $logFile);
-    $message = "Error fetching data.";
-    $aboutData = [];
-}
+// Instantiate the manager with the PDO object from Database class
+$manager = new AboutUsManager($pdo);
+$aboutData = $manager->processForm();
+$message = $manager->getMessage();
+$editId = $manager->getEditId();
+$token = $manager->getToken();
 ?>
 
 <!DOCTYPE html>
@@ -166,7 +213,7 @@ try {
             background: #f5f7fa;
             color: #333;
             line-height: 1.6;
-            margin: 0; /* Ensure no default margin interferes */
+            margin: 0;
         }
 
         .container {
@@ -369,7 +416,7 @@ try {
         <?php endif; ?>
 
         <form method="POST" enctype="multipart/form-data" id="aboutUsForm">
-            <input type="hidden" name="edit_id" id="edit_id" value="<?php echo htmlspecialchars($edit_id ?? ''); ?>">
+            <input type="hidden" name="edit_id" id="edit_id" value="<?php echo htmlspecialchars($editId ?? ''); ?>">
             <input type="hidden" name="token" id="token" value="<?php echo htmlspecialchars($token); ?>">
             <div class="form-group">
                 <label for="section">Section:</label>
@@ -489,7 +536,6 @@ try {
                 const newTable = doc.querySelector('.data-table').innerHTML;
                 document.querySelector('.data-table').innerHTML = newTable;
                 initializeButtons();
-                // Update token after refresh
                 const newToken = doc.querySelector('#token').value;
                 document.getElementById('token').value = newToken;
             })
@@ -542,7 +588,7 @@ try {
                                     confirmButtonColor: '#28a745',
                                     timer: 2000
                                 }).then(() => {
-                                    window.location.reload(); // Auto-refresh page after delete
+                                    window.location.reload();
                                 });
                             })
                             .catch(error => {
@@ -561,10 +607,10 @@ try {
         }
 
         document.addEventListener('DOMContentLoaded', () => {
-            <?php if (!$edit_id): ?>
+            <?php if (!$editId): ?>
                 updateFormFields();
             <?php else: ?>
-                updateFormFields(aboutData.find(item => String(item.id) === '<?php echo $edit_id; ?>'));
+                updateFormFields(aboutData.find(item => String(item.id) === '<?php echo $editId; ?>'));
             <?php endif; ?>
 
             initializeButtons();
@@ -578,7 +624,7 @@ try {
                     return;
                 }
 
-                e.preventDefault(); // Prevent default submission for both save and update
+                e.preventDefault();
 
                 const editId = document.getElementById('edit_id').value;
                 const actionText = editId ? 'update' : 'save';
@@ -610,7 +656,8 @@ try {
                                 document.querySelector('.container').insertBefore(messageDiv, document.querySelector('form'));
                                 setTimeout(() => messageDiv.style.display = 'none', 5000);
                             }
-                            // Auto-refresh the entire page after successful save/update
+                   // Auto-refresh the entire page after successful save/update
+
                             if (!newMessage || !newMessage.includes('Error')) {
                                 window.location.reload();
                             }

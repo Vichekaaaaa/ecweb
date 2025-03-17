@@ -42,7 +42,7 @@ $user_full_name = isset($_SESSION['full_name']) ? htmlspecialchars($_SESSION['fu
                 </div>
                 <div class="col">
                     <ul class="d-flex justify-content-end gap-3 list-unstyled m-0">
-                        <li><a href="../pages/contact.php">Contact</a></li>
+                        <li><a href="../pages/contact.php">Contact US</a></li>
                         <li><a href="../pages/cart.php">Cart</a></li>
                         <li><a href="../pages/orders.php">Your Older</a></li>
                     </ul>

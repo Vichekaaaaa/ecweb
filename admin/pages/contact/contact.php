@@ -1,129 +1,175 @@
 <?php
-// Enable error reporting for debugging (remove in production)
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
+}
+require_once 'includes/config.php'; // Assumes this provides Database class
+
 ini_set('display_errors', 1);
 ini_set('display_startup_errors', 1);
 error_reporting(E_ALL);
 
-include_once 'includes/config.php'; // Adjust path to point to includes/config.php
+class SocialMediaManager {
+    private $pdo;
 
-// Handle POST request to update social media links
-if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_POST['action']) && $_POST['action'] === 'update_social') {
-    $platform = htmlspecialchars($_POST['platform'] ?? '');
-    $url = htmlspecialchars($_POST['url'] ?? '');
-
-    try {
-        // Map "Twitter" to "X" for consistency (if submitted as Twitter, treat it as X)
-        $platform = ($platform === 'Twitter') ? 'X' : $platform;
-
-        // Check if the platform exists in the database
-        $stmt = $pdo->prepare("SELECT id FROM social_media_links WHERE platform = :platform");
-        $stmt->execute(['platform' => $platform]);
-        $existing = $stmt->fetch();
-
-        $response = [];
-        if ($existing) {
-            // Update the existing record
-            $stmt = $pdo->prepare("UPDATE social_media_links SET url = :url, updated_at = CURRENT_TIMESTAMP WHERE platform = :platform");
-            $stmt->execute(['url' => $url, 'platform' => $platform]);
-            $response = [
-                'status' => 'success',
-                'platform' => $platform,
-                'url' => $url
-            ];
-            http_response_code(200); // Explicitly set 200 OK status
-        } else {
-            $response = [
-                'status' => 'error',
-                'message' => 'The selected platform does not exist in the database.'
-            ];
-            http_response_code(400); // Bad request for invalid platform
+    public function __construct($pdo) {
+        $this->pdo = $pdo;
+        if (!$this->pdo) {
+            throw new Exception("PDO connection is not initialized.");
         }
-
-        // Clear any output buffer and send JSON response
-        ob_clean();
-        header('Content-Type: application/json');
-        echo json_encode($response);
-        exit;
-    } catch (PDOException $e) {
-        // Log the error for debugging
-        error_log("PDOException: " . $e->getMessage());
-        $response = [
-            'status' => 'error',
-            'message' => 'An error occurred. Please try again.'
-        ];
-        http_response_code(500);
-        ob_clean();
-        header('Content-Type: application/json');
-        echo json_encode($response);
-        exit;
     }
-}
 
-// Handle POST request to update contact details
-if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_POST['action']) && $_POST['action'] === 'update_contact') {
-    $email = htmlspecialchars($_POST['email'] ?? '');
-    $phone = htmlspecialchars($_POST['phone'] ?? '');
-    $map_link = htmlspecialchars($_POST['map_link'] ?? '');
+    public function updateLink($platform, $url) {
+        $platform = htmlspecialchars($platform ?? '');
+        $url = htmlspecialchars($url ?? '');
 
-    try {
-        // Check if record exists, update or insert
-        $stmt = $pdo->prepare("SELECT id FROM contact_details LIMIT 1");
-        $stmt->execute();
-        $existing = $stmt->fetch();
+        if (!$platform) return ['success' => false, 'message' => 'Platform is required.'];
+        if (!$url) return ['success' => false, 'message' => 'URL is required.'];
 
-        if ($existing) {
-            $stmt = $pdo->prepare("UPDATE contact_details SET email = :email, phone = :phone, map_link = :map_link, updated_at = CURRENT_TIMESTAMP WHERE id = :id");
-            $stmt->execute(['email' => $email, 'phone' => $phone, 'map_link' => $map_link, 'id' => $existing['id']]);
-        } else {
-            $stmt = $pdo->prepare("INSERT INTO contact_details (email, phone, map_link) VALUES (:email, :phone, :map_link)");
-            $stmt->execute(['email' => $email, 'phone' => $phone, 'map_link' => $map_link]);
+        try {
+            $platform = ($platform === 'Twitter') ? 'X' : $platform;
+            $stmt = $this->pdo->prepare("SELECT id FROM social_media_links WHERE platform = :platform");
+            $stmt->execute(['platform' => $platform]);
+            $existing = $stmt->fetch();
+
+            if ($existing) {
+                $stmt = $this->pdo->prepare("UPDATE social_media_links SET url = :url, updated_at = CURRENT_TIMESTAMP WHERE platform = :platform");
+                $stmt->execute(['url' => $url, 'platform' => $platform]);
+                return ['success' => true, 'message' => 'Link updated successfully.', 'platform' => $platform, 'url' => $url];
+            }
+            return ['success' => false, 'message' => 'The selected platform does not exist in the database.'];
+        } catch (PDOException $e) {
+            error_log("PDOException: " . $e->getMessage());
+            return ['success' => false, 'message' => 'An error occurred. Please try again.'];
         }
+    }
 
-        $response = [
-            'status' => 'success',
-            'message' => 'Contact details updated successfully!'
-        ];
-        http_response_code(200);
-        ob_clean();
-        header('Content-Type: application/json');
-        echo json_encode($response);
-        exit;
-    } catch (PDOException $e) {
-        error_log("PDOException: " . $e->getMessage());
-        $response = [
-            'status' => 'error',
-            'message' => 'An error occurred. Please try again.'
-        ];
-        http_response_code(500);
-        ob_clean();
-        header('Content-Type: application/json');
-        echo json_encode($response);
-        exit;
+    public function getLinks() {
+        try {
+            $stmt = $this->pdo->query("SELECT platform, url FROM social_media_links");
+            if ($stmt === false) {
+                throw new Exception("Query failed: " . print_r($this->pdo->errorInfo(), true));
+            }
+            $links = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+            foreach ($links as $key => $link) {
+                if ($link['platform'] === 'Twitter') {
+                    $stmt = $this->pdo->prepare("UPDATE social_media_links SET platform = 'X' WHERE platform = 'Twitter'");
+                    $stmt->execute();
+                    $links[$key]['platform'] = 'X';
+                }
+            }
+            return $links;
+        } catch (Exception $e) {
+            error_log("Error fetching links: " . $e->getMessage());
+            return [];
+        }
     }
 }
 
-// Fetch existing social media links for initial page load
-$stmt = $pdo->query("SELECT platform, url FROM social_media_links");
-if ($stmt === false) {
-    die("Query failed: " . print_r($pdo->errorInfo(), true));
-}
-$links = $stmt->fetchAll(PDO::FETCH_ASSOC);
+class ContactManager {
+    private $pdo;
 
-// Optional: Rename "Twitter" to "X" in the database if it exists
-foreach ($links as $key => $link) {
-    if ($link['platform'] === 'Twitter') {
-        $stmt = $pdo->prepare("UPDATE social_media_links SET platform = 'X' WHERE platform = 'Twitter'");
-        $stmt->execute();
-        $links[$key]['platform'] = 'X'; // Update the in-memory array
+    public function __construct($pdo) {
+        $this->pdo = $pdo;
+        if (!$this->pdo) {
+            throw new Exception("PDO connection is not initialized.");
+        }
+    }
+
+    public function updateContact($email, $phone, $map_link) {
+        $email = htmlspecialchars($email ?? '');
+        $phone = htmlspecialchars($phone ?? '');
+        $map_link = htmlspecialchars($map_link ?? '');
+
+        if (!$email) return ['success' => false, 'message' => 'Email is required.'];
+        if (!$phone) return ['success' => false, 'message' => 'Phone is required.'];
+
+        try {
+            $stmt = $this->pdo->prepare("SELECT id FROM contact_details LIMIT 1");
+            $stmt->execute();
+            $existing = $stmt->fetch();
+
+            if ($existing) {
+                $stmt = $this->pdo->prepare("UPDATE contact_details SET email = :email, phone = :phone, map_link = :map_link, updated_at = CURRENT_TIMESTAMP WHERE id = :id");
+                $stmt->execute(['email' => $email, 'phone' => $phone, 'map_link' => $map_link, 'id' => $existing['id']]);
+            } else {
+                $stmt = $this->pdo->prepare("INSERT INTO contact_details (email, phone, map_link) VALUES (:email, :phone, :map_link)");
+                $stmt->execute(['email' => $email, 'phone' => $phone, 'map_link' => $map_link]);
+            }
+            return ['success' => true, 'message' => 'Contact details updated successfully!'];
+        } catch (PDOException $e) {
+            error_log("PDOException: " . $e->getMessage());
+            return ['success' => false, 'message' => 'An error occurred. Please try again.'];
+        }
+    }
+
+    public function getContactDetails() {
+        try {
+            $stmt = $this->pdo->query("SELECT email, phone, map_link FROM contact_details LIMIT 1");
+            $details = $stmt->fetch(PDO::FETCH_ASSOC);
+            return [
+                'email' => $details['email'] ?? 'sales@shoestore.com',
+                'phone' => $details['phone'] ?? '+1 (123) 456-7890',
+                'map_link' => $details['map_link'] ?? 'https://maps.google.com/?q=YourStoreLocation'
+            ];
+        } catch (PDOException $e) {
+            error_log("Error fetching contact details: " . $e->getMessage());
+            return [
+                'email' => 'sales@shoestore.com',
+                'phone' => '+1 (123) 456-7890',
+                'map_link' => 'https://maps.google.com/?q=YourStoreLocation'
+            ];
+        }
     }
 }
 
-// Fetch existing contact details for initial page load
-$stmt = $pdo->query("SELECT email, phone, map_link FROM contact_details LIMIT 1");
-$contact_details = $stmt->fetch(PDO::FETCH_ASSOC);
-$email = $contact_details['email'] ?? 'sales@shoestore.com';
-$phone = $contact_details['phone'] ?? '+1 (123) 456-7890';
-$map_link = $contact_details['map_link'] ?? 'https://maps.google.com/?q=YourStoreLocation';
+// Initialize managers
+$database = new Database();
+$pdo = $database->getConnection();
+
+if (!$pdo) {
+    die("Failed to get PDO connection from Database class.");
+}
+
+try {
+    $socialManager = new SocialMediaManager($pdo);
+    $contactManager = new ContactManager($pdo);
+} catch (Exception $e) {
+    die("Error initializing managers: " . $e->getMessage());
+}
+
+// Handle POST requests
+if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_POST['action'])) {
+    $response = [];
+    if ($_POST['action'] === 'update_social') {
+        $result = $socialManager->updateLink($_POST['platform'] ?? '', $_POST['url'] ?? '');
+        $response = [
+            'status' => $result['success'] ? 'success' : 'error',
+            'message' => $result['message']
+        ];
+        if ($result['success']) {
+            $response['platform'] = $result['platform'];
+            $response['url'] = $result['url'];
+        }
+        http_response_code($result['success'] ? 200 : ($result['message'] === 'The selected platform does not exist in the database.' ? 400 : 500));
+    } elseif ($_POST['action'] === 'update_contact') {
+        $result = $contactManager->updateContact($_POST['email'] ?? '', $_POST['phone'] ?? '', $_POST['map_link'] ?? '');
+        $response = [
+            'status' => $result['success'] ? 'success' : 'error',
+            'message' => $result['message']
+        ];
+        http_response_code($result['success'] ? 200 : 500);
+    }
+    
+    ob_clean();
+    header('Content-Type: application/json');
+    echo json_encode($response);
+    exit;
+}
+
+// Get data for display
+$links = $socialManager->getLinks();
+$contact = $contactManager->getContactDetails();
 ?>
 
 <!DOCTYPE html>
@@ -194,33 +240,30 @@ $map_link = $contact_details['map_link'] ?? 'https://maps.google.com/?q=YourStor
             margin: 5px 0;
         }
     </style>
-    <!-- Include SweetAlert2 CSS and JS -->
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/sweetalert2@11/dist/sweetalert2.min.css">
     <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
 </head>
 <body>
     <div class="container">
-        <!-- Contact Details Section -->
         <h1>Update Contact Information</h1>
         <h2>Contact Details</h2>
         <form method="POST" action="" id="contactForm">
             <input type="hidden" name="action" value="update_contact">
             <div class="form-group">
                 <label for="email">Email:</label>
-                <input type="email" id="email" name="email" value="<?php echo htmlspecialchars($email); ?>" required>
+                <input type="email" id="email" name="email" value="<?php echo htmlspecialchars($contact['email']); ?>" required>
             </div>
             <div class="form-group">
                 <label for="phone">Phone:</label>
-                <input type="text" id="phone" name="phone" value="<?php echo htmlspecialchars($phone); ?>" required>
+                <input type="text" id="phone" name="phone" value="<?php echo htmlspecialchars($contact['phone']); ?>" required>
             </div>
             <div class="form-group">
                 <label for="map_link">Map Link:</label>
-                <input type="text" id="map_link" name="map_link" value="<?php echo htmlspecialchars($map_link); ?>" placeholder="e.g., https://maps.google.com/?q=YourStoreLocation">
+                <input type="text" id="map_link" name="map_link" value="<?php echo htmlspecialchars($contact['map_link']); ?>" placeholder="e.g., https://maps.google.com/?q=YourStoreLocation">
             </div>
             <button type="submit" id="updateContactButton">Update Contact Details</button>
         </form>
 
-        <!-- Social Media Links Section -->
         <h2>Social Media Links</h2>
         <form method="POST" action="" id="linkForm">
             <input type="hidden" name="action" value="update_social">
@@ -242,7 +285,6 @@ $map_link = $contact_details['map_link'] ?? 'https://maps.google.com/?q=YourStor
             <button type="submit" id="updateButton">Update Link</button>
         </form>
 
-        <!-- Current Links Section -->
         <div class="links-table" id="currentLinks">
             <h2>Current Links</h2>
             <?php foreach ($links as $link): ?>
@@ -255,7 +297,6 @@ $map_link = $contact_details['map_link'] ?? 'https://maps.google.com/?q=YourStor
     </div>
 
     <script>
-        // Social Media Links Form Submission
         document.getElementById('linkForm').addEventListener('submit', function(e) {
             e.preventDefault();
             const formData = new FormData(this);
@@ -314,7 +355,6 @@ $map_link = $contact_details['map_link'] ?? 'https://maps.google.com/?q=YourStor
             });
         });
 
-        // Contact Details Form Submission
         document.getElementById('contactForm').addEventListener('submit', function(e) {
             e.preventDefault();
             const formData = new FormData(this);

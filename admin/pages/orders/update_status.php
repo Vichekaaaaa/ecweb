@@ -19,23 +19,31 @@ header('Content-Type: application/json; charset=UTF-8');
 // Clear any buffered output before sending JSON
 ob_end_clean();
 
+// Instantiate the Database class to get the PDO connection
+try {
+    $database = new Database();
+    $pdo = $database->getConnection();
+    if (!$pdo) {
+        throw new Exception('Failed to establish database connection');
+    }
+} catch (Exception $e) {
+    error_log('Database Initialization Error: ' . $e->getMessage());
+    echo json_encode(['success' => false, 'message' => 'Database connection failed']);
+    exit;
+}
+
 // Check if the request is valid
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['order_id']) && isset($_POST['status'])) {
     $order_id = $_POST['order_id'];
     $status = $_POST['status'];
 
     // Validate inputs
-    if (!is_numeric($order_id) || !in_array($status, ['pending', 'shipped', 'delivered'])) {
+    if (!is_numeric($order_id) || !in_array(strtolower($status), ['pending', 'shipped', 'delivered'])) {
         echo json_encode(['success' => false, 'message' => 'Invalid order_id or status']);
         exit;
     }
 
     try {
-        // Ensure PDO is connected
-        if (!$pdo) {
-            throw new Exception('Database connection failed');
-        }
-
         // Prepare and execute the update query
         $stmt = $pdo->prepare("UPDATE ecweb.orders SET status = ? WHERE order_id = ?");
         $stmt->execute([$status, $order_id]);

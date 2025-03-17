@@ -5,90 +5,179 @@
 // Include database connection
 require_once 'includes/config.php';
 
-try {
-    // Fetch the slide from the database
-    $id = isset($_GET['id']) ? (int)$_GET['id'] : 0;
-    $stmt = $pdo->prepare("SELECT * FROM slides WHERE id = ?");
-    $stmt->execute([$id]);
-    $slide = $stmt->fetch();
+// SlideManager class to handle slide operations
+class SlideManager {
+    private $pdo;
+    private $slide;
+    private $successMessage = '';
+    private $errorMessage = '';
 
-    if (!$slide) {
-        echo "<h2>Slide Not Found</h2>";
-        echo "<p><a href='?page=slides'>Back to Slides</a></p>";
-        exit;
+    public function __construct($pdo) {
+        $this->pdo = $pdo;
+        $this->fetchSlide(isset($_GET['id']) ? (int)$_GET['id'] : 0);
     }
-} catch (PDOException $e) {
-    die("Error fetching slide: " . $e->getMessage());
-}
 
-if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    $title = htmlspecialchars($_POST['title'] ?? $slide['title']);
-    $image = $slide['image']; // Default to existing image
+    private function fetchSlide($id) {
+        try {
+            $stmt = $this->pdo->prepare("SELECT * FROM slides WHERE id = ?");
+            $stmt->execute([$id]);
+            $this->slide = $stmt->fetch();
+            if (!$this->slide) {
+                $this->errorMessage = "Slide not found.";
+            }
+        } catch (PDOException $e) {
+            $this->errorMessage = "Error fetching slide: " . $e->getMessage();
+        }
+    }
 
-    // Handle image upload (automatically save to admin/assets/images/slides/ if provided)
-    if (isset($_FILES['image']) && $_FILES['image']['error'] == UPLOAD_ERR_OK) {
-        $imageName = uniqid() . '_' . basename($_FILES['image']['name']); // Unique filename to prevent overwriting
-        $targetDir = '../assets/images/slides/'; // Relative to pages/slides/
+    public function updateSlide($data) {
+        if (!$this->slide) {
+            return false;
+        }
+
+        $id = $this->slide['id'];
+        $title = trim($data['title'] ?? $this->slide['title']);
+        $image = $this->slide['image']; // Default to existing image
+
+        // Basic validation
+        if (empty($title)) {
+            $this->errorMessage = "Please provide a slide title.";
+            return false;
+        }
+
+        // Handle image upload (optional update)
+        if (isset($_FILES['image']) && $_FILES['image']['error'] === UPLOAD_ERR_OK) {
+            $image = $this->handleImageUpload($_FILES['image'], $this->slide['image']);
+            if ($image === false) {
+                return false; // Image upload failed, error message already set
+            }
+        }
+
+        try {
+            // Update slide in the database
+            $stmt = $this->pdo->prepare("UPDATE slides SET title = ?, image = ?, created_at = ? WHERE id = ?");
+            $stmt->execute([$title, $image, $this->slide['created_at'], $id]);
+            $this->successMessage = "<div class='success-message'>
+                                     <h2>Slide Updated</h2>
+                                     <p>The slide '$title' has been updated successfully.</p>
+                                     <p><a href='?page=slides'>Back to Slides</a></p>
+                                     </div>";
+            return true;
+        } catch (PDOException $e) {
+            $this->errorMessage = "Error updating slide: " . $e->getMessage();
+            return false;
+        }
+    }
+
+    private function handleImageUpload($file, $oldImage) {
+        if (!$file || $file['error'] !== UPLOAD_ERR_OK) {
+            return $oldImage; // Return existing image if no new upload
+        }
+
+        $imageName = uniqid() . '_' . basename($file['name']);
+        $targetDir = '../assets/images/slides/';
         $targetFile = $targetDir . $imageName;
 
-        // Actual upload to the directory
-        if (move_uploaded_file($_FILES['image']['tmp_name'], $targetFile)) {
-            $image = $imageName; // Update with new filename
-            // Optionally delete the old image if it exists
-            if (!empty($slide['image']) && file_exists($targetDir . $slide['image'])) {
-                unlink($targetDir . $slide['image']);
+        // Actual upload
+        if (move_uploaded_file($file['tmp_name'], $targetFile)) {
+            // Validation for file type and size
+            $allowedTypes = ['image/jpeg', 'image/png', 'image/jpg'];
+            if (!in_array($file['type'], $allowedTypes)) {
+                $this->errorMessage = "Invalid file type. Please upload an image (JPG, PNG, JPEG).";
+                unlink($targetFile);
+                return false;
             }
+            if ($file['size'] > 2000000) { // 2MB limit
+                $this->errorMessage = "File too large. Maximum size is 2MB.";
+                unlink($targetFile);
+                return false;
+            }
+            // Optionally delete the old image if it exists
+            if (!empty($oldImage) && file_exists($targetDir . $oldImage)) {
+                unlink($targetDir . $oldImage);
+            }
+            return $imageName;
         } else {
-            echo "<p>Error uploading image. Please check permissions and try again.</p>";
-            exit;
-        }
-
-        // Validation for file type and size
-        $allowedTypes = ['image/jpeg', 'image/png', 'image/jpg'];
-        if (!in_array($_FILES['image']['type'], $allowedTypes)) {
-            echo "<p>Invalid file type. Please upload an image (JPG, PNG, JPEG).</p>";
-            unlink($targetFile); // Remove the uploaded file if invalid
-            exit;
-        }
-        if ($_FILES['image']['size'] > 2000000) { // 2MB limit
-            echo "<p>File too large. Maximum size is 2MB.</p>";
-            unlink($targetFile); // Remove the uploaded file if too large
-            exit;
+            $this->errorMessage = "Error uploading image. Please check permissions and try again.";
+            return false;
         }
     }
 
-    try {
-        // Update slide in the database with the new or existing image filename
-        $stmt = $pdo->prepare("UPDATE slides SET title = ?, image = ?, created_at = ? WHERE id = ?");
-        $stmt->execute([$title, $image, $slide['created_at'], $id]);
+    public function getSlide() {
+        return $this->slide;
+    }
 
-        // Show success message instead of redirecting immediately
-        echo "<div class='success-message'>";
-        echo "<h2>Slide Updated</h2>";
-        echo "<p>The slide '{$title}' has been updated successfully.</p>";
-        echo "<p><a href='?page=slides'>Back to Slides</a></p>";
-        echo "</div>";
-        exit;
-    } catch (PDOException $e) {
-        die("Error updating slide: " . $e->getMessage());
+    public function getSuccessMessage() {
+        return $this->successMessage;
+    }
+
+    public function getErrorMessage() {
+        return $this->errorMessage;
     }
 }
-?>
 
-<h2>Edit Slide - <?php echo htmlspecialchars($slide['title']); ?></h2>
-<p>Update the slide details below.</p>
+// SlideView class to handle rendering
+class SlideView {
+    private $slide;
+    private $successMessage;
+    private $errorMessage;
 
-<form method="POST" action="" class="product-form" enctype="multipart/form-data">
-    <label for="title">Slide Title:</label><br>
-    <input type="text" id="title" name="title" value="<?php echo htmlspecialchars($slide['title']); ?>" required><br><br>
+    public function __construct($slide, $successMessage = '', $errorMessage = '') {
+        $this->slide = $slide;
+        $this->successMessage = $successMessage;
+        $this->errorMessage = $errorMessage;
+    }
 
-    <label for="image">Slide Image:</label><br>
-    <input type="file" id="image" name="image" accept="image/*"><br>
-    <?php if (!empty($slide['image'])): ?>
-        <img src="../assets/images/slides/<?php echo htmlspecialchars($slide['image']); ?>" alt="<?php echo htmlspecialchars($slide['title']); ?>" class="product-image" style="max-width: 100px; height: auto;">
-        <input type="hidden" name="image" value="<?php echo htmlspecialchars($slide['image']); ?>">
-    <?php endif; ?><br><br>
+    public function render() {
+        if ($this->successMessage) {
+            echo $this->successMessage;
+            return;
+        }
 
-    <input type="submit" value="Update Slide">
-    <a href="?page=slides" class="back-button">Back</a>
-</form>
+        if (!$this->slide) {
+            echo "<h2>Slide Not Found</h2>";
+            echo "<p><a href='?page=slides'>Back to Slides</a></p>";
+            return;
+        }
+        ?>
+        <h2>Edit Slide - <?php echo htmlspecialchars($this->slide['title']); ?></h2>
+        <p>Update the slide details below.</p>
+
+        <?php if ($this->errorMessage): ?>
+            <div class="alert alert-danger"><?php echo $this->errorMessage; ?></div>
+        <?php endif; ?>
+
+        <form method="POST" action="" class="product-form" enctype="multipart/form-data">
+            <label for="title">Slide Title:</label><br>
+            <input type="text" id="title" name="title" value="<?php echo htmlspecialchars($this->slide['title']); ?>" required><br><br>
+
+            <label for="image">Slide Image:</label><br>
+            <input type="file" id="image" name="image" accept="image/*"><br>
+            <?php if (!empty($this->slide['image'])): ?>
+                <img src="../assets/images/slides/<?php echo htmlspecialchars($this->slide['image']); ?>" alt="<?php echo htmlspecialchars($this->slide['title']); ?>" class="product-image" style="max-width: 100px; height: auto;">
+                <input type="hidden" name="image" value="<?php echo htmlspecialchars($this->slide['image']); ?>">
+            <?php endif; ?><br><br>
+
+            <input type="submit" value="Update Slide">
+            <a href="?page=slides" class="back-button">Back</a>
+        </form>
+        <?php
+    }
+}
+
+// Main execution
+$database = new Database(); // Assuming Database class is defined in config.php
+$pdo = $database->getConnection();
+
+if (!$pdo) {
+    die("Failed to get PDO connection from Database class.");
+}
+
+$slideManager = new SlideManager($pdo);
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    $slideManager->updateSlide($_POST);
+}
+
+$slideView = new SlideView($slideManager->getSlide(), $slideManager->getSuccessMessage(), $slideManager->getErrorMessage());
+$slideView->render();

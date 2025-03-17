@@ -12,7 +12,7 @@
 </head>
 <body>
     <?php
-    session_start(); // Kept for potential future use, but not required
+    session_start(); // Kept for potential future use
     error_reporting(E_ALL);
     ini_set('display_errors', 1); // Disable in production
 
@@ -38,7 +38,8 @@
             'special_offer' => 'special_offer',
             'users' => 'users',
             'about_us' => 'about_us',
-            'contact' => 'contact', // Mapping for social media links management
+            'contact' => 'contact',
+            'social_links' => 'social_link' // Added social_links
         ];
 
         $allowed_pages = array_keys($default_actions);

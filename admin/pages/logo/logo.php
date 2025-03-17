@@ -1,19 +1,41 @@
 <?php
-require_once 'includes/config.php';
+include_once 'includes/config.php'; 
 
-try {
-    // Fetch the most recent logo, including updated_at
-    $stmt = $pdo->query("SELECT id, title, logo_value, created_at, updated_at FROM logo ORDER BY id DESC LIMIT 1");
-    $logos = $stmt->fetchAll();
-} catch (PDOException $e) {
-    die("Error fetching logos: " . $e->getMessage());
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
 }
+
+
+
+class LogoManager {
+    private $pdo;
+
+    public function __construct($pdo) {
+        $this->pdo = $pdo;
+    }
+
+    public function getLatestLogo() {
+        try {
+            $stmt = $this->pdo->query("SELECT id, title, logo_value, created_at, updated_at FROM logo ORDER BY id DESC LIMIT 1");
+            return $stmt->fetchAll(PDO::FETCH_ASSOC);
+        } catch (PDOException $e) {
+            die("Error fetching logos: " . $e->getMessage());
+        }
+    }
+}
+
+// Initialize database and LogoManager
+$database = new Database();
+$pdo = $database->getConnection();
+$logoManager = new LogoManager($pdo);
+$logos = $logoManager->getLatestLogo();
 ?>
+
 <div class="container">
     <h2>Logo</h2>
     <p>Manage your logo here.</p>
 
-    <div >
+    <div>
         <?php if (empty($logos)): ?>
             <a href="?page=logo&action=edit_logo" class="add-new-product-button">Add New Logo</a>
         <?php endif; ?>

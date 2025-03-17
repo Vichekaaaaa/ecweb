@@ -2,12 +2,32 @@
 if (session_status() === PHP_SESSION_NONE) {
     session_start();
 }
+
+// Include the database configuration (corrected path)
 require_once 'includes/config.php';
 
 // Enable error reporting for debugging (remove in production)
 ini_set('display_errors', 1);
 ini_set('display_startup_errors', 1);
 error_reporting(E_ALL);
+
+// Start output buffering to capture any unexpected output
+ob_start();
+
+// Initialize the Database class to get the PDO connection
+try {
+    $database = new Database();
+    $pdo = $database->getConnection();
+    if (!$pdo) {
+        throw new Exception("Failed to get PDO connection from Database class.");
+    }
+} catch (Exception $e) {
+    // Return JSON error response for POST requests
+    $response = ['success' => false, 'message' => 'Error initializing database connection: ' . $e->getMessage()];
+    ob_end_clean(); // Clean any output before sending JSON
+    echo json_encode($response);
+    exit;
+}
 
 // Initialize variables
 $successMessage = '';
@@ -17,7 +37,13 @@ $errorMessage = '';
 $order_id = filter_input(INPUT_GET, 'id', FILTER_SANITIZE_NUMBER_INT);
 
 if (!$order_id || $order_id <= 0) {
-    header("Location: orders.php");
+    if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+        $response = ['success' => false, 'message' => 'Invalid order ID.'];
+        ob_end_clean();
+        echo json_encode($response);
+        exit;
+    }
+    header("Location: /admin/index.php?page=orders");
     exit;
 }
 
@@ -28,12 +54,24 @@ try {
     $order = $stmt->fetch(PDO::FETCH_ASSOC);
 
     if (!$order) {
-        header("Location: orders.php");
+        if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+            $response = ['success' => false, 'message' => 'Order not found.'];
+            ob_end_clean();
+            echo json_encode($response);
+            exit;
+        }
+        header("Location: /admin/index.php?page=orders");
         exit;
     }
 } catch (PDOException $e) {
+    if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+        $response = ['success' => false, 'message' => 'Error fetching order: ' . $e->getMessage()];
+        ob_end_clean();
+        echo json_encode($response);
+        exit;
+    }
     $errorMessage = "Error fetching order: " . $e->getMessage();
-    header("Location: index.php?page=orders&error=" . urlencode($errorMessage));
+    header("Location: /admin/index.php?page=orders&error=" . urlencode($errorMessage));
     exit;
 }
 
@@ -48,32 +86,58 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     // Server-side validation
     if (!$user_id || $user_id <= 0) {
-        $errorMessage = "Invalid User ID.";
-    } elseif (!$total_amount || $total_amount <= 0) {
-        $errorMessage = "Total Amount must be greater than 0.";
-    } elseif (!$order_date) {
-        $errorMessage = "Order Date is required.";
-    } elseif (!$status || !in_array($status, ['pending', 'shipped', 'delivered'])) {
-        $errorMessage = "Invalid status.";
-    } elseif (!$shipping_address) {
-        $errorMessage = "Shipping Address is required.";
-    } elseif (!$username) {
-        $errorMessage = "Username is required.";
-    } else {
-        try {
-            $stmt = $pdo->prepare("UPDATE ecweb.orders SET user_id = ?, total_amount = ?, order_date = ?, status = ?, shipping_address = ?, username = ? WHERE order_id = ?");
-            $result = $stmt->execute([$user_id, $total_amount, $order_date, $status, $shipping_address, $username, $order_id]);
-
-            if ($result) {
-                header("Location: orders.php");
-                exit;
-            } else {
-                $errorMessage = "Failed to update the order.";
-            }
-        } catch (PDOException $e) {
-            $errorMessage = "Error updating order: " . $e->getMessage();
-        }
+        $response = ['success' => false, 'message' => 'Invalid User ID.'];
+        ob_end_clean();
+        echo json_encode($response);
+        exit;
     }
+    if (!$total_amount || $total_amount <= 0) {
+        $response = ['success' => false, 'message' => 'Total Amount must be greater than 0.'];
+        ob_end_clean();
+        echo json_encode($response);
+        exit;
+    }
+    if (!$order_date) {
+        $response = ['success' => false, 'message' => 'Order Date is required.'];
+        ob_end_clean();
+        echo json_encode($response);
+        exit;
+    }
+    if (!$status || !in_array($status, ['pending', 'shipped', 'delivered'])) {
+        $response = ['success' => false, 'message' => 'Invalid status.'];
+        ob_end_clean();
+        echo json_encode($response);
+        exit;
+    }
+    if (!$shipping_address) {
+        $response = ['success' => false, 'message' => 'Shipping Address is required.'];
+        ob_end_clean();
+        echo json_encode($response);
+        exit;
+    }
+    if (!$username) {
+        $response = ['success' => false, 'message' => 'Username is required.'];
+        ob_end_clean();
+        echo json_encode($response);
+        exit;
+    }
+
+    try {
+        $stmt = $pdo->prepare("UPDATE ecweb.orders SET user_id = ?, total_amount = ?, order_date = ?, status = ?, shipping_address = ?, username = ? WHERE order_id = ?");
+        $result = $stmt->execute([$user_id, $total_amount, $order_date, $status, $shipping_address, $username, $order_id]);
+
+        if ($result) {
+            $response = ['success' => true, 'message' => 'Order updated successfully.'];
+        } else {
+            $response = ['success' => false, 'message' => 'Failed to update the order.'];
+        }
+    } catch (PDOException $e) {
+        $response = ['success' => false, 'message' => 'Error updating order: ' . $e->getMessage()];
+    }
+
+    ob_end_clean(); // Clean any output before sending JSON
+    echo json_encode($response);
+    exit;
 }
 ?>
 
@@ -84,6 +148,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Edit Order - Admin Panel</title>
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css" rel="stylesheet">
+    <!-- Include SweetAlert2 CSS -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/sweetalert2@11/dist/sweetalert2.min.css">
     <style>
         body {
             background-color: #f8f9fa;
@@ -192,7 +258,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     <?php endif; ?>
 
     <h3>Edit Order</h3>
-    <form method="POST" action="edit-order.php?id=<?php echo htmlspecialchars($order_id); ?>">
+    <form method="POST" id="editOrderForm">
         <div class="mb-3">
             <label for="order_id" class="form-label">Order ID</label>
             <input type="text" id="order_id" name="order_id" class="form-control" value="<?php echo htmlspecialchars($order['order_id']); ?>" disabled>
@@ -230,6 +296,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     </form>
 </div>
 
+<!-- Include SweetAlert2 JS -->
+<script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
 <script>
 document.addEventListener("DOMContentLoaded", function() {
     // Handle error alerts
@@ -238,6 +306,77 @@ document.addEventListener("DOMContentLoaded", function() {
         errorAlert.style.display = "block";
         setTimeout(() => errorAlert.style.display = "none", 5000);
     }
+
+    // Handle form submission with SweetAlert
+    const editOrderForm = document.querySelector('#editOrderForm');
+    editOrderForm.addEventListener('submit', async function(event) {
+        event.preventDefault(); // Prevent default form submission
+
+        // Show SweetAlert confirmation dialog
+        const result = await Swal.fire({
+            title: 'Are you sure, babe?',
+            text: `Do you want to update Order #<?php echo htmlspecialchars($order_id); ?>?`,
+            icon: 'question',
+            showCancelButton: true,
+            confirmButtonColor: '#007bff',
+            cancelButtonColor: '#dc3545',
+            confirmButtonText: 'Yes, update it!',
+            cancelButtonText: 'Nope, cancel'
+        });
+
+        if (!result.isConfirmed) {
+            return; // User canceled the update
+        }
+
+        // Create FormData object to send form data
+        const formData = new FormData(editOrderForm);
+
+        try {
+            const response = await fetch('edit_order.php?id=<?php echo htmlspecialchars($order_id); ?>', {
+                method: 'POST',
+                body: formData
+            });
+
+            if (!response.ok) {
+                throw new Error('Network response was not ok ' + response.statusText);
+            }
+
+            const text = await response.text();
+            console.log('Raw response:', text); // Log the raw response for debugging
+            let data;
+            try {
+                data = JSON.parse(text);
+            } catch (e) {
+                console.error('Failed to parse JSON:', text);
+                throw new Error('Invalid response from server: Response is not valid JSON');
+            }
+
+            if (data.success) {
+                await Swal.fire({
+                    title: 'Updated!',
+                    text: 'Order updated successfully, babe! 🎉',
+                    icon: 'success',
+                    confirmButtonColor: '#007bff'
+                });
+                window.location.href = '/admin/index.php?page=orders';
+            } else {
+                await Swal.fire({
+                    title: 'Oops...',
+                    text: 'Something went wrong: ' + data.message,
+                    icon: 'error',
+                    confirmButtonColor: '#dc3545'
+                });
+            }
+        } catch (error) {
+            console.error('Fetch error:', error);
+            await Swal.fire({
+                title: 'Oops...',
+                text: 'An error occurred: ' + error.message,
+                icon: 'error',
+                confirmButtonColor: '#dc3545'
+            });
+        }
+    });
 });
 </script>
 </body>
