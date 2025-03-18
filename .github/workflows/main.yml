@@ -3,14 +3,14 @@ name: Deploy to EC2
 on:
   push:
     branches:
-      - main  # Runs on every push to the main branch
+      - main  # Ensure this matches your active branch, e.g., 'main' or 'master'
 
 jobs:
   deploy:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-latest  # Use a GitHub-hosted runner
 
     steps:
-      - name: Checkout repository
+      - name: Checkout code
         uses: actions/checkout@v3
 
       - name: Deploy to EC2
@@ -22,7 +22,6 @@ jobs:
           chmod 600 private_key.pem
           ssh -o StrictHostKeyChecking=no -i private_key.pem $EC2_USER@$EC2_HOST << 'EOF'
             cd /path/to/your/project
-            git pull origin main
-            # Restart services if needed
-            # Example: pm2 restart app || docker-compose up -d --build
+            git pull origin main  # Pull changes from the correct branch
+            # Restart services if needed, e.g., pm2 restart app
           EOF
